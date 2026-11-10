@@ -9,6 +9,7 @@ $(document).ready(() => {
     const elements = {
         // Checkboxes
         prePing: $('#id_pre_ping'),
+        sendLater: $('#id_send_later'),
         formupTimeNow: $('#id_formup_now'),
         createSrpLink: $('#id_srp_link'),
         createOptimer: $('#id_optimer'),
@@ -26,14 +27,27 @@ $(document).ready(() => {
         fleetName: $('#id_fleet_name'),
         formupTime: $('#id_formup_time'),
         formupTimestamp: $('#id_formup_timestamp'),
+        scheduledTime: $('#id_scheduled_time'),
+        scheduledTimestamp: $('#id_scheduled_timestamp'),
         formupLocation: $('#id_formup_location'),
         fleetDoctrine: $('#id_fleet_doctrine'),
         fleetDoctrineUrl: $('#id_fleet_doctrine_url'),
-        webhookEmbedColor: $('#id_webhook_embed_color')
+        webhookEmbedColor: $('#id_webhook_embed_color'),
+
+        // Containers
+        scheduledPings: $('.aa-fleetpings-scheduled-pings')
     };
 
-    /* Initialize datetime picker */
+    /* Initialize datetime pickers */
     elements.formupTime.datetimepicker({
+        lang: fleetpingsSettings.dateTimeLocale,
+        maskInput: true,
+        format: 'Y-m-d H:i',
+        dayOfWeekStart: 1,
+        step: 15
+    });
+
+    elements.scheduledTime.datetimepicker({
         lang: fleetpingsSettings.dateTimeLocale,
         maskInput: true,
         format: 'Y-m-d H:i',
@@ -221,6 +235,26 @@ $(document).ready(() => {
                 }
             }
 
+            // Handle "Send Later" visibility (only relevant for pre-pings)
+            if (isPrePingChecked) {
+                $('.fleetpings-send-later').show('fast');
+            } else {
+                $('.fleetpings-send-later').hide('fast');
+
+                elements.sendLater.prop('checked', false);
+            }
+
+            // Handle scheduled time field visibility (only when "Send Later" is checked)
+            const isSendLaterChecked = isPrePingChecked && elements.sendLater.is(':checked');
+
+            if (isSendLaterChecked) {
+                $('.fleetpings-scheduled-time').show('fast');
+                elements.scheduledTime.prop('disabled', false);
+            } else {
+                $('.fleetpings-scheduled-time').hide('fast');
+                elements.scheduledTime.prop('disabled', true);
+            }
+
             // Handle SRP Link visibility
             if (fleetpingsSettings.srpModuleAvailableToUser) {
                 const shouldShowSrpLink = isFormupNow && isFleetSrpChecked;
@@ -253,6 +287,57 @@ $(document).ready(() => {
             const selectedLink = $(`#fleet-doctrine-list [value="${utils.escapeInput(fleetDoctrine)}"]`).data('doctrine-url');
 
             elements.fleetDoctrineUrl.val(selectedLink || null);
+        },
+
+        /**
+         * Load the list of pending scheduled pings into the scheduled pings panel.
+         *
+         * @returns {Promise<void>} A promise that resolves when the list is loaded.
+         */
+        loadScheduledPings: async () => {
+            if (!elements.scheduledPings.length) {
+                return;
+            }
+
+            try {
+                const data = await fetchGet({
+                    url: fleetpingsSettings.url.scheduledPings,
+                    responseIsJson: false
+                });
+
+                elements.scheduledPings.html(data);
+            } catch (error) {
+                console.error('Error loading scheduled pings:', error);
+            }
+        },
+
+        /**
+         * Cancel a pending scheduled ping.
+         *
+         * @param {number|string} pingId The ID of the scheduled ping to cancel.
+         * @returns {Promise<void>} A promise that resolves when the request is complete.
+         */
+        cancelScheduledPing: async (pingId) => {
+            try {
+                const data = await fetchPost({
+                    url: fleetpingsSettings.url.cancelScheduledPing,
+                    csrfToken: elements.csrfToken.val(),
+                    payload: {id: pingId},
+                    responseIsJson: true
+                });
+
+                if (!data.success) {
+                    utils.showMessage(
+                        data.message || 'Something went wrong, no details given.',
+                        '.fleetpings-form-message',
+                        'error'
+                    );
+                }
+            } catch (error) {
+                console.error('Error cancelling scheduled ping:', error.message);
+            } finally {
+                await handlers.loadScheduledPings();
+            }
         },
 
         /**
@@ -301,6 +386,30 @@ $(document).ready(() => {
                 }
             }
 
+            // Validate scheduled "Send Later" pre-pings
+            if (elements.prePing.is(':checked') && elements.sendLater.is(':checked')) {
+                if (!validateFields(
+                    [elements.scheduledTime.val()],
+                    fleetpingsSettings.translation.scheduled.error.missingTime
+                )) {
+                    return;
+                }
+
+                const scheduledTimestamp = utils.getFormupTimestamp(utils.sanitizeInput(elements.scheduledTime.val()));
+
+                if (!scheduledTimestamp || (scheduledTimestamp * 1000) <= Date.now()) {
+                    utils.showMessage(
+                        fleetpingsSettings.translation.scheduled.error.timeInPast,
+                        '.fleetpings-form-message',
+                        'error'
+                    );
+
+                    return;
+                }
+
+                elements.scheduledTimestamp.val(scheduledTimestamp);
+            }
+
             try {
                 const formData = $('#aa-fleetping-form').serializeArray().reduce((obj, item) => {
                     obj[item.name] = item.value;
@@ -325,6 +434,11 @@ $(document).ready(() => {
                             data.message,
                             '.fleetpings-form-message'
                         );
+                    }
+
+                    // Refresh the scheduled pings list in case this was a scheduled ping
+                    if (data.scheduled) {
+                        handlers.loadScheduledPings();
                     }
                 } else {
                     utils.showMessage(
@@ -354,6 +468,22 @@ $(document).ready(() => {
         const timestamp = utils.getFormupTimestamp(utils.sanitizeInput(elements.formupTime.val()));
 
         elements.formupTimestamp.val(timestamp);
+    });
+
+    elements.scheduledTime.on('change', () => {
+        const timestamp = utils.getFormupTimestamp(utils.sanitizeInput(elements.scheduledTime.val()));
+
+        elements.scheduledTimestamp.val(timestamp);
+    });
+
+    elements.sendLater.on('change', handlers.updateCheckboxVisibility);
+
+    elements.scheduledPings.on('click', '.cancel-scheduled-ping', function () {
+        const pingId = $(this).data('ping-id');
+
+        if (window.confirm(fleetpingsSettings.translation.scheduled.cancelConfirm)) { // eslint-disable-line no-alert
+            handlers.cancelScheduledPing(pingId);
+        }
     });
 
     elements.fleetType.on('change', () => {
@@ -415,6 +545,7 @@ $(document).ready(() => {
 
     /* Initialize */
     handlers.updateCheckboxVisibility();
+    handlers.loadScheduledPings();
     dataLoader.initialize()
         .then(() => console.log('Fleetpings form initialized'))
         .catch((error) => console.error('Error initializing Fleetpings form:', error));

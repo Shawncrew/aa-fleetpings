@@ -33,6 +33,9 @@
         {% translate "Mandatory information is missing. To create an SRP link, you need to provide all of the following information:<br>» Fleet name<br>» Ships / Doctrine" as srpMissingFields %}
         {% translate "Error! Your ping was not copied to your clipboard. Maybe your browser doesn&apos;t support this feature." as copyToClipboardError %}
         {% translate "Success! Your ping text has been copied to your clipboard. Now be a good FC and throw it in your chat so you actually get some people in fleet." as copyToClipboardSuccess %}
+        {% translate "Please provide a send time for your scheduled pre-ping." as scheduledTimeMissing %}
+        {% translate "The send time must be in the future." as scheduledTimePast %}
+        {% translate "Are you sure you want to cancel this scheduled ping?" as cancelScheduledConfirm %}
 
         <script>
             const fleetpingsSettings = {
@@ -46,7 +49,9 @@
                     fleetTypes: '{% url "fleetpings:ajax_get_fleet_types" %}',
                     formupLocations: '{% url "fleetpings:ajax_get_formup_locations" %}',
                     fleetComms: '{% url "fleetpings:ajax_get_fleet_comms" %}',
-                    fleetDoctrines: '{% url "fleetpings:ajax_get_fleet_doctrines" %}'
+                    fleetDoctrines: '{% url "fleetpings:ajax_get_fleet_doctrines" %}',
+                    scheduledPings: '{% url "fleetpings:ajax_get_scheduled_pings" %}',
+                    cancelScheduledPing: '{% url "fleetpings:ajax_cancel_scheduled_ping" %}'
                 },
                 translation: {
                     optimer: {
@@ -62,10 +67,33 @@
                     copyToClipboard: {
                         error: '{{ copyToClipboardError|escapejs }}',
                         success: '{{ copyToClipboardSuccess|escapejs }}'
+                    },
+                    scheduled: {
+                        error: {
+                            missingTime: '{{ scheduledTimeMissing|escapejs }}',
+                            timeInPast: '{{ scheduledTimePast|escapejs }}'
+                        },
+                        cancelConfirm: '{{ cancelScheduledConfirm|escapejs }}'
                     }
                 }
             };
         </script>
+    </div>
+
+    <div class="row">
+        <div class="col-12 mb-3 aa-fleetpings-scheduled">
+            <div class="card card-default">
+                <div class="card-header aa-fleetpings-ping-header">
+                    <span class="card-title">{% translate "Scheduled pings" %}</span>
+                </div>
+
+                <div class="card-body">
+                    <div class="aa-fleetpings-scheduled-pings">
+                        <p class="text-muted mb-0">{% translate "Loading…" %}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 {% endblock %}
 

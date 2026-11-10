@@ -41,6 +41,17 @@
             </div>
         {% endif %}
 
+        <!-- send_later (pre-ping only) -->
+        <div class="fleetpings-send-later clearfix" style="display: none;">
+            {% bootstrap_field form.send_later %}
+        </div>
+
+        <!-- scheduled_time -->
+        <div class="fleetpings-scheduled-time clearfix" style="display: none;">
+            {% bootstrap_field form.scheduled_time %}
+            {% bootstrap_field form.scheduled_timestamp show_label=False %}
+        </div>
+
         {% bootstrap_field form.formup_now %}
 
         <!-- fleet_duration -->

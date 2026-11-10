@@ -83,6 +83,36 @@ class FleetPingForm(forms.Form):
         label=_("Pre-Ping"),
         help_text=_("Mark this checkbox if this should be a pre-ping."),
     )
+    send_later = forms.BooleanField(
+        initial=False,
+        required=False,
+        label=_("Send Later"),
+        help_text=_(
+            "Schedule this pre-ping to be sent automatically at a future time "
+            "instead of right now."
+        ),
+    )
+    scheduled_time = forms.CharField(
+        required=False,
+        label=_("Send time"),
+        max_length=254,
+        widget=forms.TextInput(
+            attrs={
+                "disabled": "disabled",
+                "autocomplete": "off",
+                "placeholder": _("Send time (EVE time)"),
+            }
+        ),
+        help_text=_(
+            "When the pre-ping will be sent out (EVE time). "
+            'Enable this field by ticking "Send Later" above.'
+        ),
+    )
+    scheduled_timestamp = forms.CharField(
+        required=False,
+        label=_("Scheduled timestamp"),
+        widget=forms.TextInput(attrs={"hidden": "hidden"}),
+    )
     ping_channel = forms.CharField(
         required=False,
         label=_("Ping to"),

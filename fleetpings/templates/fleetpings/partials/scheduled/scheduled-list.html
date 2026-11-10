@@ -1,0 +1,46 @@
+{% load i18n %}
+
+{% if scheduled_pings %}
+    <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle aa-fleetpings-scheduled-table mb-0">
+            <thead>
+                <tr>
+                    <th scope="col">{% translate "Send at (EVE time)" %}</th>
+                    <th scope="col">{% translate "Fleet name" %}</th>
+                    <th scope="col">{% translate "Ping channel" %}</th>
+                    {% if can_manage_scheduled_pings %}
+                        <th scope="col">{% translate "Scheduled by" %}</th>
+                    {% endif %}
+                    <th scope="col" class="text-end">{% translate "Action" %}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for scheduled_ping in scheduled_pings %}
+                    <tr>
+                        <td>
+                            <span data-bs-toggle="tooltip" title="{{ scheduled_ping.scheduled_time|date:'Y-m-d H:i' }} UTC">
+                                {{ scheduled_ping.scheduled_time|date:"Y-m-d H:i" }}
+                            </span>
+                        </td>
+                        <td>{{ scheduled_ping.fleet_name|default:"—" }}</td>
+                        <td>{{ scheduled_ping.webhook.name|default:"—" }}</td>
+                        {% if can_manage_scheduled_pings %}
+                            <td>{{ scheduled_ping.character_name|default:scheduled_ping.user }}</td>
+                        {% endif %}
+                        <td class="text-end">
+                            <button
+                                type="button"
+                                class="btn btn-sm btn-outline-danger cancel-scheduled-ping"
+                                data-ping-id="{{ scheduled_ping.pk }}"
+                            >
+                                {% translate "Cancel" %}
+                            </button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <p class="text-muted mb-0">{% translate "No scheduled pings." %}</p>
+{% endif %}

@@ -21,6 +21,7 @@ from fleetpings.models import (
     FleetDoctrine,
     FleetType,
     FormupLocation,
+    ScheduledPing,
     Setting,
     Webhook,
 )
@@ -329,6 +330,56 @@ class WebhookAdmin(admin.ModelAdmin):
             return ", ".join(names)
 
         return None
+
+
+@admin.register(ScheduledPing)
+class ScheduledPingAdmin(admin.ModelAdmin):
+    """
+    ScheduledPingAdmin
+    """
+
+    list_display = (
+        "scheduled_time",
+        "status",
+        "fleet_name",
+        "character_name",
+        "webhook",
+        "created_at",
+        "sent_at",
+    )
+    list_filter = ("status",)
+    ordering = ("-scheduled_time",)
+    search_fields = ("fleet_name", "character_name")
+    readonly_fields = (
+        "user",
+        "character_name",
+        "fleet_name",
+        "webhook",
+        "form_data",
+        "created_at",
+        "sent_at",
+        "error",
+    )
+
+    @admin.action(description=_("Cancel selected pending scheduled pings"))
+    def cancel_pings(self, request, queryset):
+        """
+        Admin action to cancel pending scheduled pings
+
+        :param request:
+        :type request:
+        :param queryset:
+        :type queryset:
+        :return:
+        :rtype:
+        """
+
+        updated = queryset.filter(status=ScheduledPing.Status.PENDING).update(
+            status=ScheduledPing.Status.CANCELLED
+        )
+        self.message_user(request, _("%(count)d scheduled ping(s) cancelled.") % {"count": updated})
+
+    actions = ["cancel_pings"]
 
 
 @admin.register(Setting)

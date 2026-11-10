@@ -50,6 +50,16 @@ ajax_urls = path(
                 view=views.ajax_get_fleet_doctrines,
                 name="ajax_get_fleet_doctrines",
             ),
+            path(
+                route="get-scheduled-pings/",
+                view=views.ajax_get_scheduled_pings,
+                name="ajax_get_scheduled_pings",
+            ),
+            path(
+                route="cancel-scheduled-ping/",
+                view=views.ajax_cancel_scheduled_ping,
+                name="ajax_cancel_scheduled_ping",
+            ),
         ]
     ),
 )

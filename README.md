@@ -21,6 +21,30 @@ Discord.
 
 ______________________________________________________________________
 
+> **NC fork note — "Send Later" scheduled pre-pings**
+>
+> This fork (`Shawncrew/aa-fleetpings`) adds a **Send Later** checkbox next to
+> **Pre-Ping**. When ticked, a scheduler appears to pick a future EVE (UTC) time;
+> the pre-ping is stored and dispatched automatically at that time by a Celery
+> task. Pending scheduled pings are listed on the Fleet Pings page and can be
+> cancelled (users see their own; holders of the `fleetpings.manage_scheduled_pings`
+> permission see and cancel all).
+>
+> **Required deployment step:** register the periodic task so due pings are sent.
+> Add to your AA settings (`local.py`):
+>
+> ```python
+> CELERYBEAT_SCHEDULE["fleetpings_send_scheduled_pings"] = {
+>     "task": "fleetpings.tasks.send_scheduled_pings",
+>     "schedule": 60,  # check for due pings every minute
+> }
+> ```
+>
+> Then run migrations (`manage.py migrate fleetpings`) for the new
+> `ScheduledPing` model.
+
+______________________________________________________________________
+
 <!-- mdformat-toc start --slug=github --maxlevel=6 --minlevel=2 -->
 
 - [Screenshots](#screenshots)

@@ -6,6 +6,7 @@ The views
 
 # Standard Library
 import json
+from datetime import datetime, timezone as dt_timezone
 
 # Django
 from django.conf import settings
@@ -15,7 +16,7 @@ from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import render
 from django.template.loader import render_to_string
-from django.utils import timezone
+from django.utils import dateformat, timezone
 from django.utils.translation import gettext_lazy as _
 
 # Alliance Auth
@@ -33,6 +34,7 @@ from fleetpings.app_settings import (
 )
 from fleetpings.form import FleetPingForm
 from fleetpings.helper.discord_webhook import ping_discord_webhook
+from fleetpings.helper.fleet_actions import create_optimer
 from fleetpings.helper.ping_context import get_ping_context_from_form_data
 from fleetpings.helper.urls import reverse_absolute
 from fleetpings.models import (
@@ -41,6 +43,7 @@ from fleetpings.models import (
     FleetDoctrine,
     FleetType,
     FormupLocation,
+    ScheduledPing,
     Setting,
     Webhook,
 )
@@ -293,19 +296,10 @@ def _create_optimer(request: WSGIRequest, ping_context: dict):
     :rtype:
     """
 
-    # Alliance Auth
-    from allianceauth.optimer.models import OpTimer
-
-    OpTimer(
-        doctrine=ping_context["doctrine"]["name"],
-        system=ping_context["formup_location"],
-        start=ping_context["formup_time"]["datetime_string"],
-        duration="N/A",
-        operation_name=ping_context["fleet_name"],
-        fc=ping_context["fleet_commander"],
-        post_time=timezone.now(),
+    create_optimer(
+        ping_context=ping_context,
         eve_character=request.user.profile.main_character,
-    ).save()
+    )
 
     logger.info(msg=f"Optimer created by user {request.user}")
 
@@ -453,6 +447,13 @@ def ajax_create_fleet_ping(request: WSGIRequest) -> HttpResponse:
 
             logger.debug(msg=f"Ping context: {ping_context}")
 
+            # Scheduled (send later) pre-ping? Store it and let the Celery task
+            # dispatch it when it is due, instead of sending it right now.
+            if form.cleaned_data.get("send_later"):
+                return _schedule_fleet_ping(
+                    request=request, form=form, ping_context=ping_context
+                )
+
             # Create optimer is requested
             if optimer_installed() and ping_context["create_optimer"]:
                 _create_optimer(
@@ -489,5 +490,235 @@ def ajax_create_fleet_ping(request: WSGIRequest) -> HttpResponse:
             context["message"] = str(_("Form invalid. Please check your input."))
     else:
         context["message"] = str(_("No form data submitted."))
+
+    return HttpResponse(content=json.dumps(context), content_type="application/json")
+
+
+def _parse_scheduled_time(form_data: dict) -> datetime | None:
+    """
+    Parse the requested send time from the submitted form data.
+
+    EVE time is UTC, so both the JavaScript timestamp and the raw datetime
+    string are interpreted as UTC.
+
+    :param form_data:
+    :type form_data:
+    :return: Timezone-aware (UTC) datetime, or None if it could not be parsed
+    :rtype:
+    """
+
+    timestamp = form_data.get("scheduled_timestamp")
+
+    if timestamp:
+        try:
+            return datetime.fromtimestamp(int(float(timestamp)), tz=dt_timezone.utc)
+        except (ValueError, TypeError, OSError):
+            pass
+
+    raw_datetime = form_data.get("scheduled_time")
+
+    if raw_datetime:
+        try:
+            return datetime.strptime(raw_datetime, "%Y-%m-%d %H:%M").replace(
+                tzinfo=dt_timezone.utc
+            )
+        except ValueError:
+            pass
+
+    return None
+
+
+def _schedule_fleet_ping(
+    request: WSGIRequest, form: FleetPingForm, ping_context: dict
+) -> HttpResponse:
+    """
+    Store a pre-ping to be sent later by the Celery task.
+
+    :param request:
+    :type request:
+    :param form:
+    :type form:
+    :param ping_context:
+    :type ping_context:
+    :return:
+    :rtype:
+    """
+
+    context = {"success": False, "message": ""}
+
+    # "Send Later" only makes sense for a pre-ping
+    if not form.cleaned_data.get("pre_ping"):
+        context["message"] = str(
+            _('"Send Later" can only be used together with a pre-ping.')
+        )
+
+        return HttpResponse(
+            content=json.dumps(context), content_type="application/json"
+        )
+
+    scheduled_time = _parse_scheduled_time(form_data=form.cleaned_data)
+
+    if scheduled_time is None:
+        context["message"] = str(_("Please provide a valid send time."))
+
+        return HttpResponse(
+            content=json.dumps(context), content_type="application/json"
+        )
+
+    if scheduled_time <= timezone.now():
+        context["message"] = str(_("The send time must be in the future."))
+
+        return HttpResponse(
+            content=json.dumps(context), content_type="application/json"
+        )
+
+    # Resolve the target webhook (for display) from the submitted channel id
+    webhook = None
+
+    if form.cleaned_data.get("ping_channel"):
+        try:
+            webhook = Webhook.objects.get(pk=form.cleaned_data["ping_channel"])
+        except (Webhook.DoesNotExist, ValueError):
+            webhook = None
+
+    main_character = request.user.profile.main_character
+    character_name = (
+        main_character.character_name if main_character is not None else ""
+    )
+
+    ScheduledPing.objects.create(
+        user=request.user,
+        character_name=character_name,
+        scheduled_time=scheduled_time,
+        fleet_name=form.cleaned_data.get("fleet_name", ""),
+        webhook=webhook,
+        form_data=form.cleaned_data,
+        status=ScheduledPing.Status.PENDING,
+    )
+
+    logger.info(
+        msg=f"Fleet ping scheduled for {scheduled_time} by user {request.user}"
+    )
+
+    # Render a preview of the ping so the FC can see what will be sent
+    ping_context["request"] = request
+    context["ping_context"] = render_to_string(
+        template_name="fleetpings/partials/ping/copy-paste-text.html",
+        context=ping_context,
+        request=request,
+    )
+    context["scheduled"] = True
+    context["message"] = str(
+        _("Pre-ping scheduled for %(datetime)s EVE time.")
+        % {"datetime": dateformat.format(scheduled_time, "Y-m-d H:i")}
+    )
+    context["success"] = True
+
+    return HttpResponse(content=json.dumps(context), content_type="application/json")
+
+
+def _user_can_manage_scheduled_pings(request: WSGIRequest) -> bool:
+    """
+    Whether the user may see / cancel scheduled pings of all users.
+
+    :param request:
+    :type request:
+    :return:
+    :rtype:
+    """
+
+    return request.user.has_perm(perm="fleetpings.manage_scheduled_pings")
+
+
+@login_required
+@permission_required(perm="fleetpings.basic_access")
+def ajax_get_scheduled_pings(request: WSGIRequest) -> HttpResponse:
+    """
+    Get the list of pending scheduled pings for the current user
+    (or all pending pings for managers).
+
+    :param request:
+    :type request:
+    :return:
+    :rtype:
+    """
+
+    scheduled_pings = ScheduledPing.objects.filter(
+        status=ScheduledPing.Status.PENDING
+    ).select_related("user", "webhook")
+
+    can_manage = _user_can_manage_scheduled_pings(request=request)
+
+    if not can_manage:
+        scheduled_pings = scheduled_pings.filter(user=request.user)
+
+    return render(
+        request=request,
+        template_name="fleetpings/partials/scheduled/scheduled-list.html",
+        context={
+            "scheduled_pings": scheduled_pings.order_by("scheduled_time"),
+            "can_manage_scheduled_pings": can_manage,
+        },
+    )
+
+
+@login_required
+@permission_required(perm="fleetpings.basic_access")
+def ajax_cancel_scheduled_ping(request: WSGIRequest) -> HttpResponse:
+    """
+    Cancel a pending scheduled ping.
+
+    :param request:
+    :type request:
+    :return:
+    :rtype:
+    """
+
+    context = {"success": False, "message": ""}
+
+    if request.method != "POST":
+        context["message"] = str(_("No form data submitted."))
+
+        return HttpResponse(
+            content=json.dumps(context), content_type="application/json"
+        )
+
+    try:
+        payload = json.loads(request.body)
+        ping_id = int(payload.get("id"))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        context["message"] = str(_("Invalid request."))
+
+        return HttpResponse(
+            content=json.dumps(context), content_type="application/json"
+        )
+
+    scheduled_pings = ScheduledPing.objects.filter(
+        pk=ping_id, status=ScheduledPing.Status.PENDING
+    )
+
+    if not _user_can_manage_scheduled_pings(request=request):
+        scheduled_pings = scheduled_pings.filter(user=request.user)
+
+    scheduled_ping = scheduled_pings.first()
+
+    if scheduled_ping is None:
+        context["message"] = str(
+            _("Scheduled ping not found or you are not allowed to cancel it.")
+        )
+
+        return HttpResponse(
+            content=json.dumps(context), content_type="application/json"
+        )
+
+    scheduled_ping.status = ScheduledPing.Status.CANCELLED
+    scheduled_ping.save(update_fields=["status"])
+
+    logger.info(
+        msg=f"Scheduled ping #{scheduled_ping.pk} cancelled by user {request.user}"
+    )
+
+    context["success"] = True
+    context["message"] = str(_("Scheduled ping cancelled."))
 
     return HttpResponse(content=json.dumps(context), content_type="application/json")

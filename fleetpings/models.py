@@ -11,6 +11,7 @@ from requests.exceptions import HTTPError
 from solo.models import SingletonModel
 
 # Django
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
@@ -76,7 +77,13 @@ class AaFleetpings(models.Model):
 
         managed = False
         default_permissions = ()
-        permissions = (("basic_access", _("Can access this app")),)
+        permissions = (
+            ("basic_access", _("Can access this app")),
+            (
+                "manage_scheduled_pings",
+                _("Can view and cancel scheduled pings of all users"),
+            ),
+        )
 
 
 class FleetComm(models.Model):
@@ -638,3 +645,114 @@ class Setting(SingletonModel):
         """
 
         return str(_("Fleet Pings Settings"))
+
+
+class ScheduledPing(models.Model):
+    """
+    A fleet (pre-)ping that is scheduled to be sent at a future point in time.
+
+    The full (cleaned) form payload is stored as JSON so that the ping context
+    can be rebuilt and dispatched by the Celery task when the ping is due.
+    """
+
+    class Status(models.TextChoices):
+        """
+        Lifecycle status of a scheduled ping
+        """
+
+        PENDING = "pending", _("Pending")
+        SENT = "sent", _("Sent")
+        CANCELLED = "cancelled", _("Cancelled")
+        FAILED = "failed", _("Failed")
+
+    # Who scheduled this ping
+    user = models.ForeignKey(
+        to=settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="fleetpings_scheduled_pings",
+        verbose_name=_("Scheduled by"),
+    )
+
+    # Main character name of the scheduling user (captured at schedule time, for display)
+    character_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name=_("Character name"),
+    )
+
+    # When the ping should be sent (stored in UTC == EVE time)
+    scheduled_time = models.DateTimeField(
+        db_index=True,
+        help_text=_("When the pre-ping should be sent (EVE / UTC time)"),
+        verbose_name=_("Send at (EVE time)"),
+    )
+
+    # Lifecycle status
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+        verbose_name=_("Status"),
+    )
+
+    # Fleet name (captured for display in the scheduled pings list)
+    fleet_name = models.CharField(
+        max_length=254,
+        blank=True,
+        default="",
+        verbose_name=_("Fleet name"),
+    )
+
+    # Target webhook (kept for display; the payload also carries the resolved URL)
+    webhook = models.ForeignKey(
+        to=Webhook,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="scheduled_pings",
+        verbose_name=_("Ping channel"),
+    )
+
+    # The cleaned form data needed to rebuild the ping context at send time
+    form_data = models.JSONField(
+        default=dict,
+        verbose_name=_("Form data"),
+    )
+
+    # Bookkeeping
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name=_("Created at"),
+    )
+    sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Sent at"),
+    )
+    error = models.TextField(
+        blank=True,
+        default="",
+        verbose_name=_("Error"),
+    )
+
+    def __str__(self) -> str:
+        """
+        String representation of the object
+
+        :return:
+        :rtype:
+        """
+
+        return f"{self.fleet_name or _('Fleet ping')} @ {self.scheduled_time}"
+
+    class Meta:  # pylint: disable=too-few-public-methods
+        """
+        ScheduledPing :: Meta
+        """
+
+        verbose_name = _("Scheduled ping")
+        verbose_name_plural = _("Scheduled pings")
+        default_permissions = ()
+        ordering = ("scheduled_time",)
